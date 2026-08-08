@@ -146,8 +146,6 @@ function parseDateVal(val) {
     if (typeof val === 'number' || (!isNaN(val) && !String(val).includes('/'))) {
         const serial = parseFloat(val);
         if (serial > 40000) {
-            // Excel 1900 date system epoch (Dec 30, 1899)
-            // (serial - 25569) * 86400 * 1000 gives exact UTC milliseconds
             dt = new Date(Math.round((serial - 25569) * 86400 * 1000));
         }
     } else if (val instanceof Date) {
@@ -378,6 +376,10 @@ function renderSummaryCards() {
     const monthObj = allMonthsData[selectedMonth];
     const monthTrades = monthObj ? monthObj.trades : [];
 
+    // Capital Deployed
+    let capitalDeployed = monthObj ? monthObj.capital : 100000;
+    if (capitalDeployed <= 0) capitalDeployed = 100000;
+
     // Today's P&L (Last traded day in selected month)
     let todayPnl = 0;
     let todayDateStr = '';
@@ -386,18 +388,20 @@ function renderSummaryCards() {
         todayPnl = lastTrade.netPnl;
         todayDateStr = lastTrade.dateStr;
     }
+    const todayRoi = capitalDeployed > 0 ? (todayPnl / capitalDeployed * 100) : 0;
 
     // Monthly Net P&L (Sum of daily net P&L for selected month)
     let monthlyNetPnl = 0;
-    monthTrades.forEach(t => { monthlyNetPnl += t.netPnl; });
+    let monthlyExpenses = 0;
+    monthTrades.forEach(t => { 
+        monthlyNetPnl += t.netPnl; 
+        monthlyExpenses += t.expenses;
+    });
+    const monthlyExpRoi = capitalDeployed > 0 ? (monthlyExpenses / capitalDeployed * 100) : 0;
 
     // Yearly Net P&L (Sum across all loaded months)
     let yearlyNetPnl = 0;
     allTradesChronological.forEach(t => { yearlyNetPnl += t.netPnl; });
-
-    // Capital Deployed
-    let capitalDeployed = monthObj ? monthObj.capital : 100000;
-    if (capitalDeployed <= 0) capitalDeployed = 100000;
 
     // Current Drawdown & Max Drawdown
     let currentDD = 0;
@@ -409,25 +413,39 @@ function renderSummaryCards() {
         if (t.drawdown < maxDD) maxDD = t.drawdown;
     });
 
-    // Update Cards DOM
+    // 1. Today's P&L Card with % of capital
     setCardValue('todayPnl', todayPnl, formatINR(todayPnl));
-    if ($('todayPnlSub')) $('todayPnlSub').textContent = todayDateStr ? `on ${todayDateStr}` : 'No active trade';
+    if ($('todayPnlSub')) {
+        $('todayPnlSub').textContent = todayDateStr ? `${formatPct(todayRoi)} of capital (${todayDateStr})` : 'No active trade';
+    }
 
+    // 2. Monthly Net P&L Card with % of capital
     setCardValue('monthlyPnl', monthlyNetPnl, formatINR(monthlyNetPnl));
     if ($('monthlyPnlSub')) {
         const roi = capitalDeployed > 0 ? (monthlyNetPnl / capitalDeployed * 100) : 0;
         $('monthlyPnlSub').textContent = `${formatPct(roi)} of capital`;
     }
 
+    // 3. NEW Monthly Expenses Card with % of capital
+    if ($('monthlyExpenses')) {
+        $('monthlyExpenses').textContent = formatINR(monthlyExpenses);
+        $('monthlyExpenses').className = 'card-value';
+    }
+    if ($('monthlyExpSub')) {
+        $('monthlyExpSub').textContent = `${monthlyExpRoi.toFixed(2)}% of capital`;
+    }
+
+    // 4. Yearly Net P&L Card
     setCardValue('yearlyPnl', yearlyNetPnl, formatINR(yearlyNetPnl));
     if ($('yearlyPnlSub')) $('yearlyPnlSub').textContent = `Jan to ${selectedMonth} 2026`;
 
+    // 5. Capital Deployed Card
     if ($('capitalDeployed')) $('capitalDeployed').textContent = formatINR(capitalDeployed);
     if ($('capitalSub')) $('capitalSub').textContent = `${monthTrades.length} active trading days`;
 
+    // 6. Current Drawdown Card
     const currentDDPct = capitalDeployed > 0 ? (currentDD / capitalDeployed * 100) : 0;
     const maxDDPct = capitalDeployed > 0 ? (maxDD / capitalDeployed * 100) : 0;
-
     setCardValue('currentDD', currentDD, `${formatINR(currentDD)} (${currentDDPct.toFixed(2)}%)`);
     if ($('ddSub')) $('ddSub').textContent = `Max DD: ${formatINR(maxDD)} (${maxDDPct.toFixed(2)}%)`;
 }
@@ -818,20 +836,22 @@ function renderMonthlyGrid() {
     MONTH_NAMES.forEach(mName => {
         const monthObj = allMonthsData[mName];
         const trades = monthObj ? monthObj.trades : [];
+        let grossPnl = 0;
         let netPnl = 0;
         let expenses = 0;
         let winCount = 0;
         let lossCount = 0;
 
         trades.forEach(t => {
+            grossPnl += t.grossPnl;
             netPnl += t.netPnl;
             expenses += t.expenses;
             if (t.netPnl > 0) winCount++;
             else if (t.netPnl < 0) lossCount++;
         });
 
-        const statusClass = netPnl > 0 ? 'profit' : netPnl < 0 ? 'loss' : 'neutral';
-        const statusText = netPnl > 0 ? 'PROFIT' : netPnl < 0 ? 'LOSS' : 'NO TRADES';
+        const statusClass = grossPnl > 0 ? 'profit' : grossPnl < 0 ? 'loss' : 'neutral';
+        const statusText = grossPnl > 0 ? 'PROFIT' : grossPnl < 0 ? 'LOSS' : 'NO TRADES';
 
         const card = document.createElement('div');
         card.className = 'month-summary-card';
@@ -840,9 +860,9 @@ function renderMonthlyGrid() {
                 <span class="month-card-name">${mName} 2026</span>
                 <span class="month-card-status ${statusClass}">${trades.length > 0 ? statusText : 'INACTIVE'}</span>
             </div>
-            <div class="month-card-pnl ${statusClass}">${trades.length > 0 ? formatINR(netPnl) : '—'}</div>
+            <div class="month-card-pnl ${statusClass}">${trades.length > 0 ? formatINR(grossPnl) : '—'} <span style="font-size: 11px; font-weight: 500; color: var(--text-muted);">(Gross)</span></div>
             <div class="month-card-details">
-                <span>Wins: ${winCount} | Losses: ${lossCount}</span>
+                <span>Net: ${formatINR(netPnl)}</span>
                 <span>Exp: ${formatINR(expenses)}</span>
             </div>
         `;
