@@ -1,7 +1,7 @@
 /**
  * Manual Trade Portfolio Dashboard — Live Google Sheets Integration
  * Sheet ID: 1TPs4U18P3MDsQTCOGP2n0OdrptCR10uZFI-ISGosJZ8
- * Powered by SheetJS XLSX Reader for 100% Reliable Multi-Tab Sync
+ * Powered by SheetJS XLSX Reader with UTC Timezone-Independent Date Engine
  */
 
 const SHEET_ID = '1TPs4U18P3MDsQTCOGP2n0OdrptCR10uZFI-ISGosJZ8';
@@ -108,7 +108,7 @@ function bindEvents() {
     });
 }
 
-// ===== Number & Date Parsing Helpers =====
+// ===== Number & UTC Date Parsing Helpers =====
 function parseNum(val) {
     if (val === undefined || val === null || val === '' || val === '-' || val === '- ') return 0;
     if (typeof val === 'number') return isNaN(val) ? 0 : val;
@@ -133,43 +133,67 @@ function formatPct(num) {
     return `${sign}${num.toFixed(2)}%`;
 }
 
+/**
+ * Universal UTC Date Parser — Timezone Independent
+ * Guarantees 31/07/2026 stays 31/07/2026 and 03/08/2026 stays 03/08/2026 everywhere.
+ */
 function parseDateVal(val) {
-    if (!val) return null;
-    if (val instanceof Date) return isNaN(val.getTime()) ? null : val;
-    
-    // Excel date serial number (e.g. 46237)
+    if (val === undefined || val === null || val === '') return null;
+
+    let dt = null;
+
+    // 1. Handle Excel date serial numbers (e.g. 46234 = Jul 31 2026, 46237 = Aug 3 2026)
     if (typeof val === 'number' || (!isNaN(val) && !String(val).includes('/'))) {
         const serial = parseFloat(val);
         if (serial > 40000) {
-            // Excel epoch is 1899-12-30
-            const dt = new Date((serial - 25569) * 86400 * 1000);
-            const userOffset = dt.getTimezoneOffset() * 60000;
-            return new Date(dt.getTime() + userOffset);
+            // Excel 1900 date system epoch (Dec 30, 1899)
+            // (serial - 25569) * 86400 * 1000 gives exact UTC milliseconds
+            dt = new Date(Math.round((serial - 25569) * 86400 * 1000));
         }
-    }
+    } else if (val instanceof Date) {
+        dt = val;
+    } else {
+        const str = String(val).trim();
+        let datePart = str;
+        if (str.includes('-')) {
+            datePart = str.split('-')[0].trim();
+        }
 
-    const str = String(val).trim();
-    if (str.includes('-')) {
-        const datePart = str.split('-')[0].trim();
         const parts = datePart.split('/');
         if (parts.length === 3) {
             const day = parseInt(parts[0], 10);
-            const month = parseInt(parts[1], 10) - 1;
+            const month = parseInt(parts[1], 10) - 1; // 0-based
             const year = parseInt(parts[2], 10);
-            return new Date(year, month, day);
+            dt = new Date(Date.UTC(year, month, day));
+        } else {
+            const d = new Date(str);
+            if (!isNaN(d.getTime())) dt = d;
         }
     }
-    
-    const parts = str.split('/');
-    if (parts.length === 3) {
-        const day = parseInt(parts[0], 10);
-        const month = parseInt(parts[1], 10) - 1;
-        const year = parseInt(parts[2], 10);
-        return new Date(year, month, day);
-    }
 
-    const d = new Date(str);
-    return isNaN(d.getTime()) ? null : d;
+    if (!dt || isNaN(dt.getTime())) return null;
+
+    // Use UTC methods exclusively to avoid local browser timezone shifts
+    const year = dt.getUTCFullYear();
+    const month = dt.getUTCMonth(); // 0-based
+    const date = dt.getUTCDate();
+    const dayIdx = dt.getUTCDay();
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const dayName = dayNames[dayIdx];
+
+    const paddedDay = String(date).padStart(2, '0');
+    const paddedMonth = String(month + 1).padStart(2, '0');
+    const dateStr = `${paddedDay}/${paddedMonth}/${year} - ${dayName}`;
+
+    return {
+        utcDate: dt,
+        year: year,
+        month: month,
+        date: date,
+        dayName: dayName,
+        dateStr: dateStr,
+        timestamp: dt.getTime()
+    };
 }
 
 // ===== Workbook Data Fetching via SheetJS =====
@@ -186,7 +210,8 @@ async function fetchAllData() {
         if (!resp.ok) throw new Error(`HTTP Error ${resp.status}`);
 
         const buffer = await resp.arrayBuffer();
-        const workbook = XLSX.read(buffer, { type: 'array', cellDates: true, cellFormulas: true });
+        // Parse raw cells without forcing cellDates to avoid local timezone offset shifts
+        const workbook = XLSX.read(buffer, { type: 'array', raw: true, cellFormulas: true });
 
         if (!workbook || !workbook.SheetNames || workbook.SheetNames.length === 0) {
             throw new Error('No sheets found in Google Sheet workbook');
@@ -220,7 +245,7 @@ async function fetchAllData() {
             }
         });
 
-        allTradesChronological.sort((a, b) => a.parsedDate - b.parsedDate);
+        allTradesChronological.sort((a, b) => a.dateInfo.timestamp - b.dateInfo.timestamp);
 
         // Calculate cumulative net P&L, running equity, and peak drawdown chronologically
         let cumulativeNetPnl = 0;
@@ -290,8 +315,8 @@ function parseSheetMatrix(rows, sheetName, monthShort) {
         const strDate = String(rawDate).trim().toLowerCase();
         if (strDate.startsWith('date') || strDate.startsWith('total')) continue;
 
-        const parsedDate = parseDateVal(rawDate);
-        if (!parsedDate) continue;
+        const dateInfo = parseDateVal(rawDate);
+        if (!dateInfo) continue;
 
         const grossPnl = parseNum(row[1]);
         const grossRoi = parseNum(row[2]);
@@ -304,19 +329,15 @@ function parseSheetMatrix(rows, sheetName, monthShort) {
         const netPnl = grossPnl - expenses;
         const netRoi = grossRoi > 0 ? (grossRoi - expensePct) : 0;
 
-        // Day of week
-        const dayName = parsedDate.toLocaleDateString('en-US', { weekday: 'short' });
-        const dateStr = `${parsedDate.getDate()}/${parsedDate.getMonth() + 1}/${parsedDate.getFullYear()} - ${dayName}`;
-
         // Only record active trading days (where gross P&L or expenses != 0)
         if (grossPnl !== 0 || expenses !== 0) {
             trades.push({
                 sheetName: sheetName,
                 monthShort: monthShort,
                 rawDate: rawDate,
-                parsedDate: parsedDate,
-                dateStr: dateStr,
-                dayName: dayName,
+                dateInfo: dateInfo,
+                dateStr: dateInfo.dateStr,
+                dayName: dateInfo.dayName,
                 grossPnl: grossPnl,
                 grossRoi: grossRoi,
                 expenses: expenses,
@@ -564,7 +585,7 @@ function renderTable() {
     // Sort Trades
     monthTrades.sort((a, b) => {
         let va, vb;
-        if (sortCol === 'date') { va = a.parsedDate; vb = b.parsedDate; }
+        if (sortCol === 'date') { va = a.dateInfo.timestamp; vb = b.dateInfo.timestamp; }
         else if (sortCol === 'day') { va = a.dayName; vb = b.dayName; }
         else if (sortCol === 'cummPnl') { va = a.cumulativeNetPnl; vb = b.cumulativeNetPnl; }
         else { va = a[sortCol] || 0; vb = b[sortCol] || 0; }
@@ -648,9 +669,9 @@ function renderAnalytics() {
 
     const monthObj = allMonthsData[selectedMonth];
     const monthTrades = monthObj ? [...monthObj.trades] : [];
-    monthTrades.sort((a, b) => a.parsedDate - b.parsedDate);
+    monthTrades.sort((a, b) => a.dateInfo.timestamp - b.dateInfo.timestamp);
 
-    const labels = monthTrades.map(t => `${t.parsedDate.getDate()}/${t.parsedDate.getMonth() + 1}`);
+    const labels = monthTrades.map(t => `${t.dateInfo.date}/${t.dateInfo.month + 1}`);
     const netPnls = monthTrades.map(t => t.netPnl);
     const cummPnls = monthTrades.map(t => t.cumulativeNetPnl);
 
@@ -734,13 +755,10 @@ function renderHeatmap() {
     if (!container) return;
     container.innerHTML = '';
 
-    // Create a date lookup map for all trades
+    // Map trades by exact UTC key: "2026-6-31" (July 31) or "2026-7-3" (August 3)
     const dateMap = {};
     allTradesChronological.forEach(t => {
-        const year = t.parsedDate.getFullYear();
-        const month = t.parsedDate.getMonth();
-        const date = t.parsedDate.getDate();
-        const key = `${year}-${month}-${date}`;
+        const key = `${t.dateInfo.year}-${t.dateInfo.month}-${t.dateInfo.date}`;
         dateMap[key] = t;
     });
 
@@ -756,7 +774,7 @@ function renderHeatmap() {
         const daysGrid = document.createElement('div');
         daysGrid.className = 'heatmap-days-grid';
 
-        const daysInMonth = new Date(2026, mIdx + 1, 0).getDate();
+        const daysInMonth = new Date(Date.UTC(2026, mIdx + 1, 0)).getUTCDate();
 
         for (let day = 1; day <= daysInMonth; day++) {
             const box = document.createElement('div');
