@@ -5,8 +5,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description"
-        content="Tradetron Portfolio Dashboard — Live strategy performance tracking powered by Google Sheets">
-    <title>Tradetron Portfolio Dashboard</title>
+        content="Manual Trade Portfolio Dashboard — Live performance analytics powered by Google Sheets">
+    <title>Manual Trade Portfolio Dashboard</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
@@ -29,9 +29,9 @@
             <div class="header-left">
                 <h1 class="logo">
                     <span class="logo-icon">◈</span>
-                    Tradetron Dashboard
+                    Manual Trade Dashboard
                 </h1>
-                <span class="header-subtitle">Live Performance Tracker</span>
+                <span class="header-subtitle">Live Daily Performance Tracker</span>
             </div>
             <div class="header-right">
                 <div class="header-controls">
@@ -59,7 +59,7 @@
         <div class="loading-overlay" id="loadingOverlay">
             <div class="loader-content">
                 <div class="spinner"></div>
-                <p>Fetching data from Google Sheets…</p>
+                <p>Fetching live data from Google Sheets…</p>
             </div>
         </div>
 
@@ -82,7 +82,7 @@
             <div class="card" id="cardMonthlyPnl">
                 <div class="card-header">
                     <span class="card-icon">📅</span>
-                    <span class="card-label">Monthly P&L</span>
+                    <span class="card-label">Monthly Net P&L</span>
                 </div>
                 <div class="card-value" id="monthlyPnl">—</div>
                 <div class="card-sub" id="monthlyPnlSub"></div>
@@ -90,7 +90,7 @@
             <div class="card" id="cardYearlyPnl">
                 <div class="card-header">
                     <span class="card-icon">📈</span>
-                    <span class="card-label">Yearly P&L</span>
+                    <span class="card-label">Yearly Net P&L</span>
                 </div>
                 <div class="card-value" id="yearlyPnl">—</div>
                 <div class="card-sub" id="yearlyPnlSub"></div>
@@ -132,8 +132,12 @@
                 <span class="stat-value" id="maxDD">—</span>
             </div>
             <div class="stat-chip">
-                <span class="stat-label">ROI</span>
+                <span class="stat-label">Total ROI</span>
                 <span class="stat-value" id="roi">—</span>
+            </div>
+            <div class="stat-chip">
+                <span class="stat-label">Total Expenses</span>
+                <span class="stat-value" id="totalExpenses">—</span>
             </div>
             <div class="stat-chip">
                 <span class="stat-label">Current Equity</span>
@@ -141,87 +145,90 @@
             </div>
         </section>
 
-        <!-- Day-wise PNL -->
+        <!-- Day-wise PNL Section -->
         <section class="daywise-section" id="daywiseSection">
-            <h2 class="section-title">Daywise P&L</h2>
+            <h2 class="section-title">Daywise Mon–Fri Performance</h2>
             <div class="daywise-grid" id="daywiseGrid"></div>
         </section>
 
-        <!-- Strategy Daily PNL Table -->
+        <!-- Daily Trade Log Table Section -->
         <section class="table-section" id="tableSection">
             <div class="table-header-bar">
-                <h2 class="section-title">Strategy Daily P&L — <span id="selectedMonthName">Current Month</span></h2>
+                <h2 class="section-title">Daily Trade Log — <span id="selectedMonthName">Current Month</span></h2>
                 <div class="table-actions">
-                    <input type="text" class="search-input" id="searchInput" placeholder="Search strategies…">
-                    <button class="btn-export" id="btnExport" title="Export CSV">
+                    <input type="text" class="search-input" id="searchInput" placeholder="Search by date or day…">
+                    <button class="btn-export" id="btnExport" title="Export CSV (Ctrl+E)">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                             <polyline points="7 10 12 15 17 10" />
                             <line x1="12" y1="15" x2="12" y2="3" />
                         </svg>
-                        Export
+                        Export CSV
                     </button>
                 </div>
             </div>
             <div class="table-container" id="tableContainer">
-                <table id="strategyTable">
+                <table id="tradeTable">
                     <thead id="tableHead"></thead>
                     <tbody id="tableBody"></tbody>
                 </table>
             </div>
         </section>
-        <!-- Advanced Analytics -->
+
+        <!-- Advanced Analytics Section -->
         <section class="analytics-section" id="analyticsSection">
             <h2 class="section-title">Performance Analytics</h2>
             <div class="analytics-grid">
                 <div class="chart-card">
-                    <h3 class="chart-title">Daily P&L Bar &mdash; <span id="barChartMonth">Current Month</span></h3>
+                    <h3 class="chart-title">Daily Net P&L &mdash; <span id="barChartMonth">Current Month</span></h3>
                     <div class="chart-container">
                         <canvas id="dailyBarChart"></canvas>
                     </div>
                 </div>
                 <div class="chart-card">
-                    <h3 class="chart-title">Strategy Contribution &mdash; <span id="stratChartMonth">Current Month</span></h3>
+                    <h3 class="chart-title">Cumulative Equity Curve &mdash; <span id="equityChartMonth">Current Month</span></h3>
                     <div class="chart-container">
-                        <canvas id="strategyBarChart"></canvas>
+                        <canvas id="equityLineChart"></canvas>
                     </div>
                 </div>
             </div>
             
+            <!-- Heatmap Card -->
             <div class="heatmap-card">
                 <div class="heatmap-header">
                     <h3 class="chart-title">Trading Activity &mdash; 2026 Win/Loss Heatmap</h3>
                     <div class="heatmap-legend">
-                        <span>Less</span>
+                        <span>Loss</span>
                         <div class="color-scale">
-                            <div class="scale-box scale-loss-3"></div>
-                            <div class="scale-box scale-loss-2"></div>
-                            <div class="scale-box scale-loss-1"></div>
-                            <div class="scale-box scale-neutral"></div>
-                            <div class="scale-box scale-profit-1"></div>
-                            <div class="scale-box scale-profit-2"></div>
-                            <div class="scale-box scale-profit-3"></div>
+                            <div class="scale-box scale-loss-3" title="Loss > ₹2,000"></div>
+                            <div class="scale-box scale-loss-2" title="Loss > ₹500"></div>
+                            <div class="scale-box scale-loss-1" title="Loss > ₹0"></div>
+                            <div class="scale-box scale-neutral" title="No Trade / ₹0"></div>
+                            <div class="scale-box scale-profit-1" title="Profit > ₹0"></div>
+                            <div class="scale-box scale-profit-2" title="Profit > ₹500"></div>
+                            <div class="scale-box scale-profit-3" title="Profit > ₹2,000"></div>
                         </div>
-                        <span>More</span>
+                        <span>Profit</span>
                     </div>
+                </div>
                 <div class="calendar-wrapper">
                     <div class="calendar-heatmap" id="calendarHeatmap"></div>
                 </div>
             </div>
         </section>
 
-        <!-- Monthly P&L Heatmap -->
+        <!-- Monthly Summary Grid Section -->
         <section class="heatmap-section" id="heatmapSection">
-            <h2 class="section-title">Monthly P&L Summary</h2>
+            <h2 class="section-title">2026 Monthly P&L Summary</h2>
             <div class="heatmap-grid" id="heatmapGrid"></div>
         </section>
 
         <!-- Footer -->
         <footer class="footer">
             <p>Data source: <a
-                    href="https://docs.google.com/spreadsheets/d/1lEHKRDuOk2v9WCWRv4iuz7ib_FLdkYQRurmrGBO3e3I"
-                    target="_blank" rel="noopener">Google Sheet ↗</a>
+                    href="https://docs.google.com/spreadsheets/d/1TPs4U18P3MDsQTCOGP2n0OdrptCR10uZFI-ISGosJZ8/edit?usp=sharing"
+                    target="_blank" rel="noopener">Manual Trading Google Sheet ↗</a>
                 &nbsp;|&nbsp; Auto-refreshes every 60 minutes</p>
         </footer>
     </div>

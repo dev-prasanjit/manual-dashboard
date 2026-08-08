@@ -1,30 +1,25 @@
 /**
- * Tradetron Portfolio Dashboard — Google Sheets Integration
- * Fetches all data live from a published Google Sheet.
- * No localStorage, no manual entry.
+ * Manual Trade Portfolio Dashboard — Live Google Sheets Integration
+ * Sheet ID: 1TPs4U18P3MDsQTCOGP2n0OdrptCR10uZFI-ISGosJZ8
  */
 
-const SHEET_ID = '1lEHKRDuOk2v9WCWRv4iuz7ib_FLdkYQRurmrGBO3e3I';
-const DAILY_PNL_SHEET = 'Strategies Daily PNL';
-const STRATEGIES_DB_SHEET = 'Strategies DB';
-const OVERALL_DASHBOARD_SHEET = 'Overall Dashboard';
+const SHEET_ID = '1TPs4U18P3MDsQTCOGP2n0OdrptCR10uZFI-ISGosJZ8';
 const AUTO_REFRESH_MS = 60 * 60 * 1000; // 60 minutes
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const MONTH_NAMES_FULL = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
 // ===== State =====
-let dailyPnlData = [];
-let dailyPnlHeaders = [];
-let strategyDbData = [];
-let overallDashboardData = [];
+let allMonthsData = {}; // { 'Jul': [ { dateStr, dayName, grossPnl, grossRoi, expenses, netPnl, netRoi, capital } ] }
+let allTradesChronological = [];
 let selectedMonth = null;
-let sortCol = null;
+let searchQuery = '';
+let sortCol = 'date';
 let sortDir = 'desc';
 let autoRefreshTimer = null;
-let searchQuery = '';
-let charts = { bar: null, stratBar: null };
+let charts = { bar: null, equity: null };
 
-// ===== DOM References =====
+// ===== DOM Utility =====
 const $ = id => document.getElementById(id);
 
 // ===== Init =====
@@ -40,10 +35,12 @@ document.addEventListener('DOMContentLoaded', () => {
 function initClock() {
     const update = () => {
         const now = new Date();
-        $('liveClock').textContent = now.toLocaleString('en-IN', {
+        const formatted = now.toLocaleString('en-IN', {
+            timeZone: 'Asia/Kolkata',
             weekday: 'short', day: 'numeric', month: 'short', year: 'numeric',
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
+        if ($('liveClock')) $('liveClock').textContent = formatted;
     };
     update();
     setInterval(update, 1000);
@@ -52,10 +49,12 @@ function initClock() {
 // ===== Month Selector =====
 function populateMonthSelector() {
     const sel = $('monthSelect');
-    const now = new Date();
-    const currentMonthIdx = now.getMonth();
+    if (!sel) return;
+    sel.innerHTML = '';
 
-    // Add months from Jan to Dec of 2026
+    const now = new Date();
+    const currentMonthIdx = now.getMonth(); // 0-based index
+
     MONTH_NAMES.forEach((name, i) => {
         const opt = document.createElement('option');
         opt.value = name;
@@ -69,41 +68,66 @@ function populateMonthSelector() {
 
 // ===== Events =====
 function bindEvents() {
-    $('btnRefresh').addEventListener('click', () => {
-        $('btnRefresh').classList.add('spinning');
-        fetchAllData().finally(() => {
-            setTimeout(() => $('btnRefresh').classList.remove('spinning'), 600);
+    if ($('btnRefresh')) {
+        $('btnRefresh').addEventListener('click', () => {
+            $('btnRefresh').classList.add('spinning');
+            fetchAllData().finally(() => {
+                setTimeout(() => $('btnRefresh').classList.remove('spinning'), 600);
+            });
         });
-    });
+    }
 
-    $('monthSelect').addEventListener('change', (e) => {
-        selectedMonth = e.target.value;
-        renderAll();
-    });
+    if ($('monthSelect')) {
+        $('monthSelect').addEventListener('change', (e) => {
+            selectedMonth = e.target.value;
+            renderAll();
+        });
+    }
 
-    $('searchInput').addEventListener('input', (e) => {
-        searchQuery = e.target.value.toLowerCase().trim();
-        renderTable();
-    });
+    if ($('searchInput')) {
+        $('searchInput').addEventListener('input', (e) => {
+            searchQuery = e.target.value.toLowerCase().trim();
+            renderTable();
+        });
+    }
 
-    $('btnExport').addEventListener('click', exportCSV);
+    if ($('btnExport')) $('btnExport').addEventListener('click', exportCSV);
+    if ($('btnDismissError')) {
+        $('btnDismissError').addEventListener('click', () => {
+            $('errorBanner').style.display = 'none';
+        });
+    }
 
-    $('btnDismissError').addEventListener('click', () => {
-        $('errorBanner').style.display = 'none';
-    });
-
-    // Keyboard shortcuts
+    // Keyboard shortcut (Ctrl+E or Cmd+E to export CSV)
     document.addEventListener('keydown', (e) => {
-        if ((e.metaKey || e.ctrlKey) && e.key === 'e') {
+        if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'e') {
             e.preventDefault();
             exportCSV();
         }
     });
 }
 
-// ===== Data Fetching =====
-function buildCsvUrl(sheetName) {
-    return `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`;
+// ===== Data Parsing Helpers =====
+function parseNum(val) {
+    if (!val || val === '-' || val === '- ') return 0;
+    if (typeof val === 'number') return val;
+    return parseFloat(val.replace(/[₹,%\s]/g, '')) || 0;
+}
+
+function formatINR(num) {
+    if (num === undefined || num === null || isNaN(num)) return '₹0';
+    if (num === 0) return '₹0';
+    const abs = Math.abs(num);
+    const sign = num < 0 ? '-' : '';
+    if (abs >= 10000000) return sign + '₹' + (abs / 10000000).toFixed(2) + ' Cr';
+    if (abs >= 100000) return sign + '₹' + (abs / 100000).toFixed(2) + ' L';
+    return sign + '₹' + abs.toLocaleString('en-IN', { maximumFractionDigits: 0 });
+}
+
+function formatPct(num) {
+    if (num === undefined || num === null || isNaN(num)) return '0.00%';
+    const sign = num > 0 ? '+' : '';
+    return `${sign}${num.toFixed(2)}%`;
 }
 
 function parseCSV(text) {
@@ -140,25 +164,28 @@ function parseCSV(text) {
             }
         }
     }
-    // Last row
     row.push(current.trim());
     if (row.some(c => c !== '')) rows.push(row);
-
     return rows;
 }
 
-function parseNum(val) {
-    if (!val || val === '-' || val === '- ') return 0;
-    return parseFloat(val.replace(/[₹,\s]/g, '')) || 0;
+// Parses date strings like "1/07/2026 - Wed" or "31/07/2026 - Fri" or "2026-07-31"
+function parseDateStr(str) {
+    if (!str) return null;
+    const parts = str.split('-')[0].trim().split('/');
+    if (parts.length === 3) {
+        const day = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10) - 1;
+        const year = parseInt(parts[2], 10);
+        return new Date(year, month, day);
+    }
+    const d = new Date(str);
+    return isNaN(d.getTime()) ? null : d;
 }
 
-function formatINR(num) {
-    if (num === 0) return '₹0';
-    const abs = Math.abs(num);
-    const sign = num < 0 ? '-' : '';
-    if (abs >= 10000000) return sign + '₹' + (abs / 10000000).toFixed(2) + ' Cr';
-    if (abs >= 100000) return sign + '₹' + (abs / 100000).toFixed(2) + ' L';
-    return sign + '₹' + abs.toLocaleString('en-IN', { maximumFractionDigits: 0 });
+// ===== Google Sheet Fetching =====
+function buildCsvUrl(sheetName) {
+    return `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`;
 }
 
 async function fetchSheet(sheetName) {
@@ -170,37 +197,155 @@ async function fetchSheet(sheetName) {
 }
 
 async function fetchAllData() {
-    $('loadingOverlay').classList.remove('hidden');
-    $('errorBanner').style.display = 'none';
+    if ($('loadingOverlay')) $('loadingOverlay').classList.remove('hidden');
+    if ($('errorBanner')) $('errorBanner').style.display = 'none';
+
+    allMonthsData = {};
+    allTradesChronological = [];
 
     try {
-        const [daily, db, overall] = await Promise.all([
-            fetchSheet(DAILY_PNL_SHEET),
-            fetchSheet(STRATEGIES_DB_SHEET),
-            fetchSheet(OVERALL_DASHBOARD_SHEET),
-        ]);
+        const monthFetchPromises = MONTH_NAMES.map(async (shortName, idx) => {
+            const fullName = MONTH_NAMES_FULL[idx];
+            const candidateNames = [
+                `${shortName} 26 Algo PnL`,
+                `${shortName} 26`,
+                `${shortName} 2026`,
+                `${fullName} 2026`,
+                `${shortName}-26`
+            ];
 
-        // Parse Daily PNL
-        if (daily.length > 0) {
-            dailyPnlHeaders = daily[0];
-            dailyPnlData = daily.slice(1);
+            for (const sheetName of candidateNames) {
+                try {
+                    const rows = await fetchSheet(sheetName);
+                    if (rows && rows.length > 1) {
+                        const parsed = parseSheetRows(rows, shortName);
+                        if (parsed.trades.length > 0) {
+                            allMonthsData[shortName] = parsed;
+                            return;
+                        }
+                    }
+                } catch (e) {
+                    // Try next candidate sheet name silently
+                }
+            }
+        });
+
+        await Promise.all(monthFetchPromises);
+
+        // Compile all trades into chronological order
+        Object.values(allMonthsData).forEach(m => {
+            if (m.trades) allTradesChronological.push(...m.trades);
+        });
+
+        allTradesChronological.sort((a, b) => a.parsedDate - b.parsedDate);
+
+        // Calculate cumulative net equity and peak drawdown chronologically
+        let cumulativeNetPnl = 0;
+        let peakEquity = 0;
+        let runningCapital = 100000;
+
+        allTradesChronological.forEach(trade => {
+            if (trade.capital > 0) runningCapital = trade.capital;
+            cumulativeNetPnl += trade.netPnl;
+            trade.cumulativeNetPnl = cumulativeNetPnl;
+            trade.currentEquity = runningCapital + cumulativeNetPnl;
+            
+            if (cumulativeNetPnl > peakEquity) {
+                peakEquity = cumulativeNetPnl;
+            }
+            trade.drawdown = cumulativeNetPnl - peakEquity; // <= 0
+        });
+
+        if ($('lastUpdated')) {
+            $('lastUpdated').textContent = `Updated ${new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`;
         }
 
-        strategyDbData = db;
-        overallDashboardData = overall;
-
-        $('lastUpdated').textContent = `Updated ${new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`;
-
         renderAll();
-        showToast('Data refreshed successfully', 'success');
+        showToast('Live sheet data synced', 'success');
     } catch (err) {
         console.error('Fetch error:', err);
-        $('errorMessage').textContent = `Failed to load data: ${err.message}. Check network or sheet permissions.`;
-        $('errorBanner').style.display = 'flex';
-        showToast('Failed to fetch data', 'error');
+        if ($('errorMessage')) {
+            $('errorMessage').textContent = `Failed to load data: ${err.message}. Check network or sheet permissions.`;
+        }
+        if ($('errorBanner')) $('errorBanner').style.display = 'flex';
+        showToast('Failed to fetch sheet data', 'error');
     } finally {
-        $('loadingOverlay').classList.add('hidden');
+        if ($('loadingOverlay')) $('loadingOverlay').classList.add('hidden');
     }
+}
+
+function parseSheetRows(rows, monthShort) {
+    let capital = 100000;
+    const trades = [];
+
+    // Right side capital check (Cols O, P, Q - index 14, 15, 16)
+    rows.forEach(r => {
+        for (let colIdx = 14; colIdx < r.length; colIdx++) {
+            if (r[colIdx] && r[colIdx].trim().toLowerCase() === 'capital') {
+                // Next row or column might have the capital
+                for (let nextCol = colIdx; nextCol < r.length; nextCol++) {
+                    const num = parseNum(r[nextCol]);
+                    if (num > 10000) { capital = num; break; }
+                }
+            }
+        }
+    });
+
+    // Header row is index 0: Date, Today's PnL, Today's ROI, Expenses, Expense %, Month PnL, Month ROI
+    for (let i = 1; i < rows.length; i++) {
+        const r = rows[i];
+        const rawDate = r[0] ? r[0].trim() : '';
+
+        // Ignore summary total row or empty rows
+        if (!rawDate || rawDate.toLowerCase().startsWith('total')) continue;
+
+        const parsedDate = parseDateStr(rawDate);
+        if (!parsedDate) continue;
+
+        const grossPnl = parseNum(r[1]);
+        const grossRoi = parseNum(r[2]);
+        const expenses = parseNum(r[3]);
+        const expensePct = parseNum(r[4]);
+        
+        let netPnl = parseNum(r[5]);
+        // If netPnl column is 0 or empty but gross/expenses exist, calculate it:
+        if (netPnl === 0 && (grossPnl !== 0 || expenses !== 0)) {
+            netPnl = grossPnl - expenses;
+        }
+
+        let netRoi = parseNum(r[6]);
+        if (netRoi === 0 && grossRoi !== 0) {
+            netRoi = grossRoi - expensePct;
+        }
+
+        // Extract day name from "1/07/2026 - Wed" or Date object
+        let dayName = '';
+        if (rawDate.includes('-')) {
+            const split = rawDate.split('-');
+            if (split.length > 1) dayName = split[1].trim();
+        }
+        if (!dayName) {
+            dayName = parsedDate.toLocaleDateString('en-US', { weekday: 'short' });
+        }
+
+        trades.push({
+            dateStr: rawDate,
+            parsedDate: parsedDate,
+            dayName: dayName,
+            grossPnl: grossPnl,
+            grossRoi: grossRoi,
+            expenses: expenses,
+            expensePct: expensePct,
+            netPnl: netPnl,
+            netRoi: netRoi,
+            capital: capital,
+            monthShort: monthShort,
+            cumulativeNetPnl: 0,
+            drawdown: 0
+        });
+    }
+
+    return { capital, trades };
 }
 
 // ===== Auto Refresh =====
@@ -209,245 +354,173 @@ function startAutoRefresh() {
     autoRefreshTimer = setInterval(fetchAllData, AUTO_REFRESH_MS);
 }
 
-// ===== Rendering =====
+// ===== Main Render =====
 function renderAll() {
     renderSummaryCards();
     renderStatsRow();
     renderDaywise();
-    renderAnalytics();
     renderTable();
+    renderAnalytics();
     renderHeatmap();
-    $('selectedMonthName').textContent = `${selectedMonth}-26`;
+    renderMonthlyGrid();
+    if ($('selectedMonthName')) $('selectedMonthName').textContent = `${selectedMonth}-26`;
 }
 
 // ===== Summary Cards =====
 function renderSummaryCards() {
-    const monthRows = dailyPnlData.filter(r => r[3] === selectedMonth);
-    const allRows = dailyPnlData;
+    const monthObj = allMonthsData[selectedMonth];
+    const monthTrades = monthObj ? monthObj.trades : [];
 
-    // Today's PNL — column 4 (Total Daily PNL). Find last row with data for selected month
+    // Today's P&L (Last traded day in selected month)
     let todayPnl = 0;
-    let todayDate = '';
-    for (let i = monthRows.length - 1; i >= 0; i--) {
-        const val = parseNum(monthRows[i][4]);
-        if (val !== 0) {
-            todayPnl = val;
-            todayDate = monthRows[i][0];
+    let todayDateStr = '';
+    for (let i = monthTrades.length - 1; i >= 0; i--) {
+        if (monthTrades[i].grossPnl !== 0 || monthTrades[i].expenses !== 0) {
+            todayPnl = monthTrades[i].netPnl;
+            todayDateStr = monthTrades[i].dateStr;
             break;
         }
     }
 
-    // Monthly PNL — sum of column 4 for current month
-    let monthlyPnl = 0;
-    monthRows.forEach(r => { monthlyPnl += parseNum(r[4]); });
+    // Monthly Net P&L
+    let monthlyNetPnl = 0;
+    monthTrades.forEach(t => { monthlyNetPnl += t.netPnl; });
 
-    // Yearly PNL — sum of column 4 for all rows
-    let yearlyPnl = 0;
-    allRows.forEach(r => { yearlyPnl += parseNum(r[4]); });
+    // Yearly Net P&L
+    let yearlyNetPnl = 0;
+    allTradesChronological.forEach(t => { yearlyNetPnl += t.netPnl; });
 
-    // Capital — from Strategies DB, find the row for selected month
-    let capitalDeployed = 0;
-    const monthKey = `${selectedMonth}-26`;
-    // Strategies DB rows 5+ have month capital data at column E (Monthly Capital)
-    // Row format: [S.No, Client Name, Latest Capital, '', Monthly Capital, ...]
-    // or monthly rows: ['', 'Jan-26', value, ...]
-    // The monthly capital matrix: rows 6-9 have "Jan-26" to "Apr-26" in column E
-    // Capital for current month = the "Monthly Total" column value for that month row
-    const dbMonthRow = strategyDbData.find(r => r[4] === monthKey);
-    if (dbMonthRow) {
-        // Monthly Total is the last non-empty meaningful column. In our data, it's at the column labeled "Monthly Total"
-        // From the DB header, find the index of Monthly Total
-        if (strategyDbData.length > 0) {
-            const dbHeader = strategyDbData[0];
-            const totalIdx = dbHeader.findIndex(h => h.trim().toLowerCase().includes('monthly total'));
-            if (totalIdx >= 0 && dbMonthRow[totalIdx]) {
-                capitalDeployed = parseNum(dbMonthRow[totalIdx]);
-            }
-        }
-    }
+    // Capital Deployed
+    let capitalDeployed = monthObj ? monthObj.capital : 100000;
+    if (capitalDeployed <= 0) capitalDeployed = 100000;
 
-    // If no capital from DB month row, try the "Total Capital" from the bottom of DB
-    if (capitalDeployed === 0) {
-        const totalCapRow = strategyDbData.find(r => r[1] && r[1].trim() === 'Total Capital');
-        if (totalCapRow) capitalDeployed = parseNum(totalCapRow[2]);
-    }
-
-    // Current Drawdown — from the last trading day recorded in the sheet (globally)
+    // Current Drawdown (drawdown on the last available traded day overall)
     let currentDD = 0;
-    for (let i = allRows.length - 1; i >= 0; i--) {
-        const totalPnl = parseNum(allRows[i][4]);
-        if (totalPnl !== 0) {
-            currentDD = parseNum(allRows[i][6]);
-            break;
-        }
-    }
-    // Max DD across all time
     let maxDD = 0;
-    allRows.forEach(r => {
-        const dd = parseNum(r[6]);
-        if (dd < maxDD) maxDD = dd;
+    if (allTradesChronological.length > 0) {
+        const lastTrade = allTradesChronological[allTradesChronological.length - 1];
+        currentDD = lastTrade.drawdown || 0;
+    }
+    allTradesChronological.forEach(t => {
+        if (t.drawdown < maxDD) maxDD = t.drawdown;
     });
 
-    // Update cards
+    // Update Cards DOM
     setCardValue('todayPnl', todayPnl, formatINR(todayPnl));
-    $('todayPnlSub').textContent = todayDate ? `on ${todayDate}` : 'No trading data';
+    if ($('todayPnlSub')) $('todayPnlSub').textContent = todayDateStr ? `on ${todayDateStr}` : 'No trading data';
 
-    setCardValue('monthlyPnl', monthlyPnl, formatINR(monthlyPnl));
-    $('monthlyPnlSub').textContent = capitalDeployed > 0 ? `${(monthlyPnl / capitalDeployed * 100).toFixed(2)}% of capital` : '';
-
-    setCardValue('yearlyPnl', yearlyPnl, formatINR(yearlyPnl));
-    $('yearlyPnlSub').textContent = `Jan to ${selectedMonth} 2026`;
-
-    $('capitalDeployed').textContent = formatINR(capitalDeployed);
-    $('capitalDeployed').className = 'card-value';
-
-    // Count active strategies for current month
-    const activeStrategies = getActiveStrategiesForMonth(selectedMonth);
-    $('capitalSub').textContent = `${activeStrategies.length} active strategies`;
-
-    // Get overall total capital for DD% calculation
-    let overallCapital = capitalDeployed;
-    if (overallCapital === 0) {
-        // Fallback: scan Overall Dashboard for Total Capital
-        overallDashboardData.forEach(row => {
-            for (let i = 0; i < row.length - 1; i++) {
-                if ((row[i] || '').trim() === 'Total Capital') {
-                    for (let j = i + 1; j < row.length; j++) {
-                        if (row[j] && row[j].trim()) { overallCapital = parseNum(row[j]); break; }
-                    }
-                }
-            }
-        });
+    setCardValue('monthlyPnl', monthlyNetPnl, formatINR(monthlyNetPnl));
+    if ($('monthlyPnlSub')) {
+        const roi = capitalDeployed > 0 ? (monthlyNetPnl / capitalDeployed * 100) : 0;
+        $('monthlyPnlSub').textContent = `${formatPct(roi)} of capital`;
     }
 
-    const currentDDPct = overallCapital > 0 ? (currentDD / overallCapital * 100).toFixed(2) : '—';
-    const maxDDPct = overallCapital > 0 ? (maxDD / overallCapital * 100).toFixed(2) : '—';
+    setCardValue('yearlyPnl', yearlyNetPnl, formatINR(yearlyNetPnl));
+    if ($('yearlyPnlSub')) $('yearlyPnlSub').textContent = `Jan to ${selectedMonth} 2026`;
 
-    setCardValue('currentDD', currentDD, `${formatINR(currentDD)} (${currentDDPct}%)`);
-    $('ddSub').textContent = `Max DD: ${formatINR(maxDD)} (${maxDDPct}%)`;
+    if ($('capitalDeployed')) $('capitalDeployed').textContent = formatINR(capitalDeployed);
+    if ($('capitalSub')) {
+        const activeDays = monthTrades.filter(t => t.grossPnl !== 0 || t.expenses !== 0).length;
+        $('capitalSub').textContent = `${activeDays} active trading days`;
+    }
+
+    const currentDDPct = capitalDeployed > 0 ? (currentDD / capitalDeployed * 100) : 0;
+    const maxDDPct = capitalDeployed > 0 ? (maxDD / capitalDeployed * 100) : 0;
+
+    setCardValue('currentDD', currentDD, `${formatINR(currentDD)} (${currentDDPct.toFixed(2)}%)`);
+    if ($('ddSub')) $('ddSub').textContent = `Max DD: ${formatINR(maxDD)} (${maxDDPct.toFixed(2)}%)`;
 }
 
 function setCardValue(elId, num, text) {
     const el = $(elId);
+    if (!el) return;
     el.textContent = text;
     el.className = 'card-value ' + (num > 0 ? 'positive' : num < 0 ? 'negative' : '');
 }
 
 // ===== Stats Row =====
 function renderStatsRow() {
-    // Extract from Overall Dashboard
-    // Row 6 (index 5 in data, 0-indexed after header): "Win Days" at col index 12 header mapping
-    // The Overall Dashboard is complex — let's extract key metrics from known positions
-    // Based on the CSV analysis:
-    // Row 1 (data[0]): Total Capital at col ~18: 3,550,000 | Today's PNL at col ~32
-    // Row 2 (data[1]): Current Equity at col ~18 | Last 5 Days at col ~32
-    // Row 3 (data[2]): Overall PNL at col ~18 | Last 30 Days at col ~32 | Max DD at col ~50
-    // Row 4 (data[3]): ROI at col ~18
-    // Row 7 (data[6]): Win Days at col ~38: 35 | Loss Days at col ~32: 27
-
-    let totalCapital = 0, currentEquity = 0, overallPnl = 0, roi = '';
-    let winDays = 0, lossDays = 0;
+    let winDays = 0;
+    let lossDays = 0;
     let maxDDVal = 0;
+    let totalExpenses = 0;
+    let yearlyNetPnl = 0;
+    let latestCapital = 100000;
 
-    if (overallDashboardData.length > 1) {
-        // Parse from the known positions in Overall Dashboard
-        const findVal = (rowIdx, searchTerm) => {
-            if (rowIdx >= overallDashboardData.length) return '';
-            const row = overallDashboardData[rowIdx];
-            for (let i = 0; i < row.length; i++) {
-                if (row[i] && row[i].trim().toLowerCase().includes(searchTerm.toLowerCase())) {
-                    // Find next non-empty cell
-                    for (let j = i + 1; j < row.length; j++) {
-                        if (row[j] && row[j].trim()) return row[j].trim();
-                    }
-                }
-            }
-            return '';
-        };
+    allTradesChronological.forEach(t => {
+        if (t.netPnl > 0) winDays++;
+        else if (t.netPnl < 0) lossDays++;
+        if (t.drawdown < maxDDVal) maxDDVal = t.drawdown;
+        totalExpenses += t.expenses;
+        yearlyNetPnl += t.netPnl;
+        if (t.capital > 0) latestCapital = t.capital;
+    });
 
-        // Scan all rows for key metrics
-        overallDashboardData.forEach(row => {
-            for (let i = 0; i < row.length - 1; i++) {
-                const cell = (row[i] || '').trim();
-                const nextNonEmpty = (() => {
-                    for (let j = i + 1; j < row.length; j++) {
-                        if (row[j] && row[j].trim()) return row[j].trim();
-                    }
-                    return '';
-                })();
+    const totalTradedDays = winDays + lossDays;
+    const winRatio = totalTradedDays > 0 ? Math.round((winDays / totalTradedDays) * 100) : 0;
+    const totalRoi = latestCapital > 0 ? (yearlyNetPnl / latestCapital * 100) : 0;
+    const currentEquity = latestCapital + yearlyNetPnl;
 
-                if (cell === 'Total Capital') totalCapital = parseNum(nextNonEmpty);
-                if (cell === 'Current Equity') currentEquity = parseNum(nextNonEmpty);
-                if (cell === 'Overall PNL') overallPnl = parseNum(nextNonEmpty);
-                if (cell === 'ROI') roi = nextNonEmpty;
-                if (cell === 'Win Days') winDays = parseInt(nextNonEmpty) || 0;
-                if (cell === 'Loss Days') lossDays = parseInt(nextNonEmpty) || 0;
-                if (cell === 'Max Drawdown (MDD)') maxDDVal = parseNum(nextNonEmpty);
-                if (cell === 'Win Ratio') {
-                    // Already have winDays and lossDays
-                }
-            }
-        });
+    if ($('winDays')) {
+        $('winDays').textContent = winDays;
+        $('winDays').className = 'stat-value positive';
     }
-
-    $('winDays').textContent = winDays || '—';
-    $('winDays').className = 'stat-value positive';
-    $('lossDays').textContent = lossDays || '—';
-    $('lossDays').className = 'stat-value negative';
-
-    const totalDays = winDays + lossDays;
-    $('winRatio').textContent = totalDays > 0 ? `${Math.round(winDays / totalDays * 100)}%` : '—';
-    $('winRatio').className = 'stat-value ' + (winDays > lossDays ? 'positive' : 'negative');
-
-    $('maxDD').textContent = maxDDVal ? formatINR(maxDDVal) : '—';
-    $('maxDD').className = 'stat-value negative';
-
-    $('roi').textContent = roi || '—';
-    $('roi').className = 'stat-value ' + (parseFloat(roi) >= 0 ? 'positive' : 'negative');
-
-    $('currentEquity').textContent = currentEquity ? formatINR(currentEquity) : '—';
-    $('currentEquity').className = 'stat-value';
+    if ($('lossDays')) {
+        $('lossDays').textContent = lossDays;
+        $('lossDays').className = 'stat-value negative';
+    }
+    if ($('winRatio')) {
+        $('winRatio').textContent = totalTradedDays > 0 ? `${winRatio}%` : '—';
+        $('winRatio').className = 'stat-value ' + (winRatio >= 50 ? 'positive' : 'negative');
+    }
+    if ($('maxDD')) {
+        $('maxDD').textContent = maxDDVal !== 0 ? formatINR(maxDDVal) : '—';
+        $('maxDD').className = 'stat-value negative';
+    }
+    if ($('roi')) {
+        $('roi').textContent = formatPct(totalRoi);
+        $('roi').className = 'stat-value ' + (totalRoi >= 0 ? 'positive' : 'negative');
+    }
+    if ($('totalExpenses')) {
+        $('totalExpenses').textContent = formatINR(totalExpenses);
+        $('totalExpenses').className = 'stat-value';
+    }
+    if ($('currentEquity')) {
+        $('currentEquity').textContent = formatINR(currentEquity);
+        $('currentEquity').className = 'stat-value';
+    }
 }
 
-// ===== Day-wise PNL =====
+// ===== Day-wise Performance (Mon-Fri) =====
 function renderDaywise() {
     const grid = $('daywiseGrid');
+    if (!grid) return;
     grid.innerHTML = '';
 
-    const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
-    const dayData = {};
+    const dayMap = { 'Mon': 'Monday', 'Tue': 'Tuesday', 'Wed': 'Wednesday', 'Thu': 'Thursday', 'Fri': 'Friday' };
+    const dayTotals = { 'Monday': 0, 'Tuesday': 0, 'Wednesday': 0, 'Thursday': 0, 'Friday': 0 };
 
-    // Scan all rows of Overall Dashboard for day labels and their values
-    overallDashboardData.forEach(row => {
-        for (let i = 0; i < row.length - 1; i++) {
-            const cell = (row[i] || '').trim();
-            if (days.includes(cell)) {
-                // Find the next non-empty cell as the PNL value
-                for (let j = i + 1; j < row.length; j++) {
-                    const val = (row[j] || '').trim();
-                    if (val) {
-                        dayData[cell] = parseNum(val);
-                        break;
-                    }
-                }
+    allTradesChronological.forEach(t => {
+        for (const [short, full] of Object.entries(dayMap)) {
+            if (t.dayName.toLowerCase().includes(short.toLowerCase())) {
+                dayTotals[full] += t.netPnl;
+                break;
             }
         }
     });
 
-    // Find max absolute value for proportional bar sizing
-    const values = days.map(d => dayData[d] || 0);
+    const values = Object.values(dayTotals);
     const maxAbs = Math.max(...values.map(v => Math.abs(v)), 1);
 
-    days.forEach(day => {
-        const val = dayData[day] || 0;
-        const cls = val > 0 ? 'profit' : val < 0 ? 'loss' : 'neutral';
-        const barPct = Math.round(Math.abs(val) / maxAbs * 100);
+    Object.entries(dayTotals).forEach(([day, val]) => {
+        const cls = val > 0 ? 'positive' : val < 0 ? 'negative' : '';
+        const barPct = Math.round((Math.abs(val) / maxAbs) * 100);
 
         const card = document.createElement('div');
-        card.className = `daywise-card ${cls}`;
+        card.className = 'daywise-card';
         card.innerHTML = `
             <div class="daywise-day">${day}</div>
-            <div class="daywise-value ${pnlClass(val)}">${val !== 0 ? formatINR(val) : '—'}</div>
+            <div class="daywise-value ${cls}">${val !== 0 ? formatINR(val) : '—'}</div>
             <div class="daywise-bar">
                 <div class="daywise-bar-fill ${val >= 0 ? 'positive' : 'negative'}" style="width: ${barPct}%"></div>
             </div>
@@ -456,61 +529,38 @@ function renderDaywise() {
     });
 }
 
-// ===== Strategy Table =====
-function getActiveStrategiesForMonth(month) {
-    if (dailyPnlHeaders.length < 9) return [];
-
-    // Strategy columns start at index 8 (column I onwards)
-    const strategyStartIdx = 8;
-    const monthRows = dailyPnlData.filter(r => r[3] === month);
-
-    const activeStrategies = [];
-    for (let col = strategyStartIdx; col < dailyPnlHeaders.length; col++) {
-        const name = dailyPnlHeaders[col];
-        if (!name || !name.trim() || name.trim() === 'Remarks') break;
-
-        // Check if this strategy has any non-zero PNL this month
-        const hasData = monthRows.some(r => {
-            const val = parseNum(r[col]);
-            return val !== 0;
-        });
-
-        if (hasData) {
-            activeStrategies.push({ name: name.replace(/\s*Daily PNL\s*/gi, '').trim(), colIdx: col });
-        }
-    }
-
-    return activeStrategies;
-}
-
+// ===== Daily Trade Log Table =====
 function renderTable() {
     const thead = $('tableHead');
     const tbody = $('tableBody');
-    const monthRows = dailyPnlData.filter(r => r[3] === selectedMonth);
-    const activeStrategies = getActiveStrategiesForMonth(selectedMonth);
+    if (!thead || !tbody) return;
 
-    // Filter strategies by search
-    const filteredStrategies = searchQuery
-        ? activeStrategies.filter(s => s.name.toLowerCase().includes(searchQuery))
-        : activeStrategies;
+    const monthObj = allMonthsData[selectedMonth];
+    let monthTrades = monthObj ? [...monthObj.trades] : [];
 
-    // Build header: Date | Day | Total Daily PNL | Cumm P&L | DD Cal | ...strategy names
+    // Filter by search query
+    if (searchQuery) {
+        monthTrades = monthTrades.filter(t => 
+            t.dateStr.toLowerCase().includes(searchQuery) ||
+            t.dayName.toLowerCase().includes(searchQuery)
+        );
+    }
+
+    // Build Table Header
     thead.innerHTML = '';
     const headerRow = document.createElement('tr');
-
     const cols = [
         { key: 'date', label: 'Date' },
         { key: 'day', label: 'Day' },
-        { key: 'totalPnl', label: 'Total P&L' },
-        { key: 'cummPnl', label: 'Cumm P&L' },
-        { key: 'dd', label: 'Drawdown' },
+        { key: 'grossPnl', label: 'Gross P&L' },
+        { key: 'expenses', label: 'Expenses' },
+        { key: 'netPnl', label: 'Net P&L' },
+        { key: 'netRoi', label: 'ROI %' },
+        { key: 'cummPnl', label: 'Cumm Net P&L' },
+        { key: 'drawdown', label: 'Drawdown' },
     ];
 
-    filteredStrategies.forEach(s => {
-        cols.push({ key: `strat_${s.colIdx}`, label: s.name });
-    });
-
-    cols.forEach((col, i) => {
+    cols.forEach(col => {
         const th = document.createElement('th');
         th.textContent = col.label;
         th.dataset.key = col.key;
@@ -530,106 +580,46 @@ function renderTable() {
     });
     thead.appendChild(headerRow);
 
-    // Build rows
-    let tableRows = monthRows.map(r => {
-        const row = {
-            date: r[0] || '',
-            day: r[1] || '',
-            totalPnl: parseNum(r[4]),
-            cummPnl: parseNum(r[5]),
-            dd: parseNum(r[6]),
-            strategies: {}
-        };
-        filteredStrategies.forEach(s => {
-            row.strategies[s.colIdx] = parseNum(r[s.colIdx]);
-        });
-        return row;
+    // Sort Trades
+    monthTrades.sort((a, b) => {
+        let va, vb;
+        if (sortCol === 'date') { va = a.parsedDate; vb = b.parsedDate; }
+        else if (sortCol === 'day') { va = a.dayName; vb = b.dayName; }
+        else if (sortCol === 'cummPnl') { va = a.cumulativeNetPnl; vb = b.cumulativeNetPnl; }
+        else { va = a[sortCol] || 0; vb = b[sortCol] || 0; }
+        if (va < vb) return sortDir === 'asc' ? -1 : 1;
+        if (va > vb) return sortDir === 'asc' ? 1 : -1;
+        return 0;
     });
 
-    // Filter out rows with no trading activity (future dates with just carry-forward cummPnl)
-    tableRows = tableRows.filter(r => {
-        return r.totalPnl !== 0 || Object.values(r.strategies).some(v => v !== 0);
-    });
-
-    // Sort
-    if (sortCol) {
-        tableRows.sort((a, b) => {
-            let va, vb;
-            if (sortCol === 'date') {
-                va = parseDate(a.date); vb = parseDate(b.date);
-            } else if (sortCol.startsWith('strat_')) {
-                const idx = parseInt(sortCol.split('_')[1]);
-                va = a.strategies[idx] || 0; vb = b.strategies[idx] || 0;
-            } else {
-                va = a[sortCol] || 0; vb = b[sortCol] || 0;
-            }
-            return sortDir === 'asc' ? va - vb : vb - va;
-        });
-    }
-
-    // Render rows
+    // Build Table Body
     tbody.innerHTML = '';
 
-    if (tableRows.length === 0) {
+    if (monthTrades.length === 0) {
         const tr = document.createElement('tr');
         const td = document.createElement('td');
         td.colSpan = cols.length;
-        td.textContent = 'No trading data for this month';
+        td.textContent = 'No trade entries for this month';
         td.style.textAlign = 'center';
-        td.style.padding = '40px';
+        td.style.padding = '36px';
         td.style.color = 'var(--text-muted)';
         tr.appendChild(td);
         tbody.appendChild(tr);
         return;
     }
 
-    tableRows.forEach(r => {
+    monthTrades.forEach(t => {
         const tr = document.createElement('tr');
-
-        // Date
-        addCell(tr, r.date, '');
-        // Day
-        addCell(tr, r.day, '');
-        // Total PNL
-        addCell(tr, formatINR(r.totalPnl), pnlClass(r.totalPnl));
-        // Cumm PNL
-        addCell(tr, formatINR(r.cummPnl), pnlClass(r.cummPnl));
-        // DD
-        addCell(tr, r.dd !== 0 ? formatINR(r.dd) : '—', r.dd < 0 ? 'negative' : 'zero');
-
-        // Strategies
-        filteredStrategies.forEach(s => {
-            const val = r.strategies[s.colIdx] || 0;
-            addCell(tr, val !== 0 ? formatINR(val) : '—', val !== 0 ? pnlClass(val) : 'zero');
-        });
-
+        addCell(tr, t.dateStr, '');
+        addCell(tr, t.dayName, '');
+        addCell(tr, formatINR(t.grossPnl), t.grossPnl > 0 ? 'positive' : t.grossPnl < 0 ? 'negative' : 'zero');
+        addCell(tr, t.expenses > 0 ? formatINR(t.expenses) : '—', 'zero');
+        addCell(tr, formatINR(t.netPnl), t.netPnl > 0 ? 'positive' : t.netPnl < 0 ? 'negative' : 'zero');
+        addCell(tr, formatPct(t.netRoi), t.netRoi > 0 ? 'positive' : t.netRoi < 0 ? 'negative' : 'zero');
+        addCell(tr, formatINR(t.cumulativeNetPnl), t.cumulativeNetPnl > 0 ? 'positive' : t.cumulativeNetPnl < 0 ? 'negative' : 'zero');
+        addCell(tr, t.drawdown < 0 ? formatINR(t.drawdown) : '—', t.drawdown < 0 ? 'negative' : 'zero');
         tbody.appendChild(tr);
     });
-
-    // Total row
-    const totalTr = document.createElement('tr');
-    totalTr.className = 'total-row';
-    addCell(totalTr, 'TOTAL', '');
-    addCell(totalTr, `${tableRows.length} days`, '');
-
-    const totalPnl = tableRows.reduce((s, r) => s + r.totalPnl, 0);
-    addCell(totalTr, formatINR(totalPnl), pnlClass(totalPnl));
-
-    // Last cumm PNL
-    const lastCumm = tableRows.length > 0 ? tableRows[tableRows.length - 1].cummPnl : 0;
-    addCell(totalTr, formatINR(lastCumm), pnlClass(lastCumm));
-
-    // Min DD
-    const minDD = Math.min(...tableRows.map(r => r.dd));
-    addCell(totalTr, minDD < 0 ? formatINR(minDD) : '—', 'negative');
-
-    // Strategy totals
-    filteredStrategies.forEach(s => {
-        const total = tableRows.reduce((sum, r) => sum + (r.strategies[s.colIdx] || 0), 0);
-        addCell(totalTr, formatINR(total), pnlClass(total));
-    });
-
-    tbody.appendChild(totalTr);
 }
 
 function addCell(tr, text, cls) {
@@ -639,289 +629,242 @@ function addCell(tr, text, cls) {
     tr.appendChild(td);
 }
 
-function pnlClass(val) {
-    return val > 0 ? 'positive' : val < 0 ? 'negative' : 'zero';
-}
-
-function parseDate(dateStr) {
-    if (!dateStr) return 0;
-    const d = new Date(dateStr + ' 2026');
-    return isNaN(d.getTime()) ? 0 : d.getTime();
-}
-
-// ===== Heatmap =====
-function renderHeatmap() {
-    const grid = $('heatmapGrid');
-    grid.innerHTML = '';
-
-    // Monthly PNL data from the Strategies DB (rows 36-47 in the CSV, these are the monthly summary rows)
-    // Or calculate from Daily PNL data
-    MONTH_NAMES.forEach(month => {
-        const monthRows = dailyPnlData.filter(r => r[3] === month);
-        let monthPnl = 0;
-        monthRows.forEach(r => { monthPnl += parseNum(r[4]); });
-
-        const cell = document.createElement('div');
-        cell.className = `heatmap-cell ${monthPnl > 0 ? 'profit' : monthPnl < 0 ? 'loss' : 'neutral'}`;
-
-        const label = document.createElement('div');
-        label.className = 'heatmap-month';
-        label.textContent = `${month}-26`;
-
-        const value = document.createElement('div');
-        value.className = `heatmap-value ${pnlClass(monthPnl)}`;
-        value.textContent = monthPnl !== 0 ? formatINR(monthPnl) : '—';
-
-        cell.appendChild(label);
-        cell.appendChild(value);
-        grid.appendChild(cell);
-    });
-}
-
-// ===== Export =====
+// ===== CSV Export =====
 function exportCSV() {
-    const monthRows = dailyPnlData.filter(r => r[3] === selectedMonth);
-    const activeStrategies = getActiveStrategiesForMonth(selectedMonth);
-
-    if (monthRows.length === 0) {
-        showToast('No data to export', 'info');
+    const monthObj = allMonthsData[selectedMonth];
+    if (!monthObj || !monthObj.trades || monthObj.trades.length === 0) {
+        showToast('No data to export for selected month', 'error');
         return;
     }
 
-    const headers = ['Date', 'Day', 'Total P&L', 'Cumm P&L', 'Drawdown', ...activeStrategies.map(s => s.name)];
-    const rows = monthRows.map(r => {
-        return [
-            r[0], r[1],
-            parseNum(r[4]), parseNum(r[5]), parseNum(r[6]),
-            ...activeStrategies.map(s => parseNum(r[s.colIdx]))
-        ];
-    });
+    const headers = ['Date', 'Day', 'Gross P&L', 'Expenses', 'Net P&L', 'ROI %', 'Cumm Net P&L', 'Drawdown'];
+    const rows = monthObj.trades.map(t => [
+        `"${t.dateStr}"`,
+        `"${t.dayName}"`,
+        t.grossPnl,
+        t.expenses,
+        t.netPnl,
+        t.netRoi.toFixed(2),
+        t.cumulativeNetPnl,
+        t.drawdown
+    ]);
 
-    const csvContent = [headers, ...rows].map(row => row.map(c => `"${c}"`).join(',')).join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `tradetron_${selectedMonth}_2026.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-    showToast(`Exported ${selectedMonth}-26 data`, 'success');
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `Manual_Trading_${selectedMonth}_2026.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showToast(`Exported ${selectedMonth}-26 trades to CSV`, 'success');
 }
 
-// ===== Toast =====
+// ===== Analytics Charts =====
+function renderAnalytics() {
+    if ($('barChartMonth')) $('barChartMonth').textContent = `${selectedMonth}-26`;
+    if ($('equityChartMonth')) $('equityChartMonth').textContent = `${selectedMonth}-26`;
+
+    const monthObj = allMonthsData[selectedMonth];
+    const monthTrades = monthObj ? [...monthObj.trades] : [];
+    monthTrades.sort((a, b) => a.parsedDate - b.parsedDate);
+
+    const labels = monthTrades.map(t => t.dateStr.split('-')[0].trim());
+    const netPnls = monthTrades.map(t => t.netPnl);
+    const cummPnls = monthTrades.map(t => t.cumulativeNetPnl);
+
+    // 1. Daily Net P&L Bar Chart
+    const barCtx = $('dailyBarChart');
+    if (barCtx) {
+        if (charts.bar) charts.bar.destroy();
+        charts.bar = new Chart(barCtx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Net P&L (₹)',
+                    data: netPnls,
+                    backgroundColor: netPnls.map(v => v >= 0 ? '#10b981' : '#ef4444'),
+                    borderRadius: 6,
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: (ctx) => `Net P&L: ${formatINR(ctx.raw)}`
+                        }
+                    }
+                },
+                scales: {
+                    x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#64748b' } },
+                    y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#64748b', callback: v => formatINR(v) } }
+                }
+            }
+        });
+    }
+
+    // 2. Cumulative Equity Line Chart
+    const equityCtx = $('equityLineChart');
+    if (equityCtx) {
+        if (charts.equity) charts.equity.destroy();
+        charts.equity = new Chart(equityCtx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Cumulative Net P&L',
+                    data: cummPnls,
+                    borderColor: '#6366f1',
+                    backgroundColor: 'rgba(99, 102, 241, 0.12)',
+                    fill: true,
+                    tension: 0.3,
+                    pointRadius: 4,
+                    pointHoverRadius: 6,
+                    pointBackgroundColor: '#818cf8'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: (ctx) => `Cumm Net P&L: ${formatINR(ctx.raw)}`
+                        }
+                    }
+                },
+                scales: {
+                    x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#64748b' } },
+                    y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#64748b', callback: v => formatINR(v) } }
+                }
+            }
+        });
+    }
+}
+
+// ===== 2026 Win/Loss Calendar Heatmap =====
+function renderHeatmap() {
+    const container = $('calendarHeatmap');
+    if (!container) return;
+    container.innerHTML = '';
+
+    // Create a date lookup map for all trades
+    const dateMap = {};
+    allTradesChronological.forEach(t => {
+        const year = t.parsedDate.getFullYear();
+        const month = t.parsedDate.getMonth();
+        const date = t.parsedDate.getDate();
+        const key = `${year}-${month}-${date}`;
+        dateMap[key] = t;
+    });
+
+    MONTH_NAMES.forEach((mName, mIdx) => {
+        const col = document.createElement('div');
+        col.className = 'heatmap-month-col';
+
+        const label = document.createElement('div');
+        label.className = 'heatmap-month-label';
+        label.textContent = mName;
+        col.appendChild(label);
+
+        const daysGrid = document.createElement('div');
+        daysGrid.className = 'heatmap-days-grid';
+
+        const daysInMonth = new Date(2026, mIdx + 1, 0).getDate();
+
+        for (let day = 1; day <= daysInMonth; day++) {
+            const box = document.createElement('div');
+            box.className = 'day-box';
+            
+            const key = `2026-${mIdx}-${day}`;
+            const trade = dateMap[key];
+
+            if (trade && (trade.grossPnl !== 0 || trade.expenses !== 0)) {
+                const val = trade.netPnl;
+                let colorClass = 'scale-neutral';
+                if (val > 2000) colorClass = 'scale-profit-3';
+                else if (val > 500) colorClass = 'scale-profit-2';
+                else if (val > 0) colorClass = 'scale-profit-1';
+                else if (val < -2000) colorClass = 'scale-loss-3';
+                else if (val < -500) colorClass = 'scale-loss-2';
+                else if (val < 0) colorClass = 'scale-loss-1';
+
+                box.classList.add(colorClass);
+                box.title = `${trade.dateStr}: Net P&L ${formatINR(val)}`;
+            } else {
+                box.classList.add('scale-neutral');
+                box.title = `${day} ${mName} 2026: No Trade Data`;
+            }
+
+            daysGrid.appendChild(box);
+        }
+
+        col.appendChild(daysGrid);
+        container.appendChild(col);
+    });
+}
+
+// ===== Monthly Summary Grid =====
+function renderMonthlyGrid() {
+    const grid = $('heatmapGrid');
+    if (!grid) return;
+    grid.innerHTML = '';
+
+    MONTH_NAMES.forEach(mName => {
+        const monthObj = allMonthsData[mName];
+        const trades = monthObj ? monthObj.trades : [];
+        let netPnl = 0;
+        let expenses = 0;
+        let winCount = 0;
+        let lossCount = 0;
+
+        trades.forEach(t => {
+            netPnl += t.netPnl;
+            expenses += t.expenses;
+            if (t.netPnl > 0) winCount++;
+            else if (t.netPnl < 0) lossCount++;
+        });
+
+        const statusClass = netPnl > 0 ? 'profit' : netPnl < 0 ? 'loss' : 'neutral';
+        const statusText = netPnl > 0 ? 'PROFIT' : netPnl < 0 ? 'LOSS' : 'NEUTRAL';
+
+        const card = document.createElement('div');
+        card.className = 'month-summary-card';
+        card.innerHTML = `
+            <div class="month-card-header">
+                <span class="month-card-name">${mName} 2026</span>
+                <span class="month-card-status ${statusClass}">${statusText}</span>
+            </div>
+            <div class="month-card-pnl ${statusClass}">${trades.length > 0 ? formatINR(netPnl) : '—'}</div>
+            <div class="month-card-details">
+                <span>Wins: ${winCount} | Losses: ${lossCount}</span>
+                <span>Exp: ${formatINR(expenses)}</span>
+            </div>
+        `;
+        grid.appendChild(card);
+    });
+}
+
+// ===== Toast Notification System =====
 function showToast(message, type = 'info') {
     const container = $('toastContainer');
+    if (!container) return;
+
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
-    toast.textContent = message;
+    toast.innerHTML = `
+        <span>${type === 'success' ? '✓' : type === 'error' ? '✕' : 'ℹ'}</span>
+        <span>${message}</span>
+    `;
+
     container.appendChild(toast);
     setTimeout(() => {
         toast.style.opacity = '0';
-        toast.style.transform = 'translateX(100%)';
-        toast.style.transition = '0.3s ease-in';
         setTimeout(() => toast.remove(), 300);
-    }, 3000);
-}
-
-// ===== Analytics =====
-function renderAnalytics() {
-    $('barChartMonth').textContent = `${selectedMonth}-26`;
-    $('stratChartMonth').textContent = `${selectedMonth}-26`;
-
-    const monthRows = dailyPnlData.filter(r => r[3] === selectedMonth);
-    const activeStrategies = getActiveStrategiesForMonth(selectedMonth);
-
-    // 1. Daily P&L Bar Chart
-    const dailyLabels = [];
-    const dailyData = [];
-    const dailyColors = [];
-
-    monthRows.forEach(row => {
-        const pnl = parseNum(row[4]);
-        // Only include days with actual activity
-        if (pnl !== 0 || Object.values(activeStrategies).some(s => parseNum(row[s.colIdx]) !== 0)) {
-            dailyLabels.push(row[0] || 'Unknown');
-            dailyData.push(pnl);
-            dailyColors.push(pnl >= 0 ? '#10b981' : '#ef4444');
-        }
-    });
-
-    const commonOptions = {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-            legend: { display: false },
-            tooltip: {
-                backgroundColor: 'rgba(15, 23, 42, 0.9)',
-                titleFont: { family: 'Inter', size: 13 },
-                bodyFont: { family: 'Inter', size: 14, weight: 'bold' },
-                padding: 12,
-                cornerRadius: 8,
-                callbacks: {
-                    label: function(context) { return formatINR(context.raw); }
-                }
-            }
-        },
-        scales: {
-            x: { grid: { color: 'rgba(100,116,139,0.1)' }, ticks: { color: '#94a3b8', font: { family: 'Inter' } } },
-            y: { grid: { color: 'rgba(100,116,139,0.1)' }, ticks: { color: '#94a3b8', font: { family: 'Inter' } } }
-        }
-    };
-
-    if (charts.bar) { charts.bar.destroy(); }
-    charts.bar = new Chart($('dailyBarChart').getContext('2d'), {
-        type: 'bar',
-        data: {
-            labels: dailyLabels,
-            datasets: [{ data: dailyData, backgroundColor: dailyColors, borderRadius: 4 }]
-        },
-        options: commonOptions
-    });
-
-    // 2. Strategy Contribution Bar
-    const stratLabels = [];
-    const stratData = [];
-    const stratColors = [];
-
-    activeStrategies.forEach(strat => {
-        let stratTotal = 0;
-        monthRows.forEach(row => { stratTotal += parseNum(row[strat.colIdx]); });
-        stratLabels.push(strat.name);
-        stratData.push(stratTotal);
-        stratColors.push(stratTotal >= 0 ? '#6366f1' : '#f43f5e'); // accent / rose
-    });
-
-    if (charts.stratBar) { charts.stratBar.destroy(); }
-    charts.stratBar = new Chart($('strategyBarChart').getContext('2d'), {
-        type: 'bar',
-        data: {
-            labels: stratLabels,
-            datasets: [{ data: stratData, backgroundColor: stratColors, borderRadius: 4 }]
-        },
-        options: {
-            indexAxis: 'y',
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: { display: false },
-                tooltip: {
-                    backgroundColor: 'rgba(15, 23, 42, 0.9)',
-                    titleFont: { family: 'Inter', size: 13 },
-                    bodyFont: { family: 'Inter', size: 14, weight: 'bold' },
-                    padding: 12,
-                    cornerRadius: 8,
-                    callbacks: {
-                        label: function(context) { return formatINR(context.raw); }
-                    }
-                }
-            },
-            scales: {
-                x: { 
-                    grid: { color: 'rgba(100,116,139,0.1)' }, 
-                    ticks: { color: '#94a3b8', font: { family: 'Inter' } },
-                    beginAtZero: true
-                },
-                y: { 
-                    grid: { color: 'rgba(100,116,139,0.1)' }, 
-                    ticks: { color: '#94a3b8', font: { family: 'Inter' } }
-                }
-            }
-        }
-    });
-
-    // 3. Calendar Heatmap
-    renderCalendarHeatmap();
-}
-
-function renderCalendarHeatmap() {
-    const calendar = $('calendarHeatmap');
-    calendar.innerHTML = '';
-
-    // Process all data for dictionary { 'DD-MMM-YY': pnl }
-    const pnlDict = {};
-    dailyPnlData.forEach(r => {
-        const dateStr = r[0]; // e.g. "1-Jan-26"
-        const pnl = parseNum(r[4]);
-        // Format to comparable standard
-        if (dateStr) pnlDict[dateStr.trim()] = pnl;
-    });
-
-    // Generate dates for 2026
-    const startDate = new Date(2026, 0, 1);
-    const endDate = new Date(2026, 11, 31);
-    
-    // Day of week offset so it aligns like a real calendar (Jan 1 2026 is a Thursday = index 4)
-    const firstDayOffset = startDate.getDay();
-    
-    // Add month labels
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    
-    // Inject Y-axis labels fixed to column 1
-    let currentHtml = `
-        <div class="cal-label-y" style="grid-column: 1; grid-row: 3;">Mon</div>
-        <div class="cal-label-y" style="grid-column: 1; grid-row: 5;">Wed</div>
-        <div class="cal-label-y" style="grid-column: 1; grid-row: 7;">Fri</div>
-    `;
-    
-    // Create empty cells for offset in column 2
-    for (let i = 0; i < firstDayOffset; i++) {
-        currentHtml += '<div style="grid-column: 2; grid-row: ' + (i + 2) + '; width: 100%;"></div>'; // +2 because row 1 is for month label
-    }
-
-    let currentCol = 2; // start from col 2 for the heatmap squares
-    let currentRow = firstDayOffset + 2;
-    let currentMonth = -1;
-
-    for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
-        const month = d.getMonth();
-        // Set month label if first time seeing this month (approximately above the column)
-        if (month !== currentMonth && d.getDate() <= 7) {
-            currentHtml += `<div class="cal-month-label" style="grid-column: ${currentCol};">${months[month]}</div>`;
-            currentMonth = month;
-        }
-
-        // Format exactly how it looks in Sheet: "1-Jan-26"
-        const dStr = d.toLocaleDateString('en-GB', { day:'numeric', month:'short' }).replace(' ', '-') + '-26';
-        let pnl = 0;
-        let hasData = false;
-
-        // Try exact match or padded match
-        if (pnlDict[dStr] !== undefined) { pnl = pnlDict[dStr]; hasData = true; }
-        else {
-            const paddedDstr = d.toLocaleDateString('en-GB', { day:'2-digit', month:'short' }).replace(' ', '-') + '-26';
-            if (pnlDict[paddedDstr] !== undefined) { pnl = pnlDict[paddedDstr]; hasData = true; }
-        }
-
-        // Determine color class
-        let colorClass = 'neutral';
-        if (hasData) {
-            if (pnl > 50000) colorClass = 'profit-3';
-            else if (pnl > 25000) colorClass = 'profit-2';
-            else if (pnl > 0) colorClass = 'profit-1';
-            else if (pnl < -50000) colorClass = 'loss-3';
-            else if (pnl < -25000) colorClass = 'loss-2';
-            else if (pnl < 0) colorClass = 'loss-1';
-            else colorClass = 'neutral'; // strictly 0 is grey
-        }
-
-        const dateDisplay = d.toLocaleDateString('en-IN', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
-        const pnlDisplay = hasData ? formatINR(pnl) : 'No data';
-
-        currentHtml += `
-            <div class="cal-day ${colorClass}" style="grid-column: ${currentCol}; grid-row: ${currentRow};">
-                <div class="cal-tooltip">
-                    <strong>${dateDisplay}</strong><br/>
-                    ${pnlDisplay}
-                </div>
-            </div>
-        `;
-
-        currentRow++;
-        if (currentRow > 8) {
-            currentRow = 2; // reset to Monday row
-            currentCol++;
-        }
-    }
-
-    calendar.innerHTML = currentHtml;
+    }, 3500);
 }
