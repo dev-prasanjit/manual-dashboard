@@ -210,7 +210,6 @@ async function fetchAllData() {
         if (!resp.ok) throw new Error(`HTTP Error ${resp.status}`);
 
         const buffer = await resp.arrayBuffer();
-        // Parse raw cells without forcing cellDates to avoid local timezone offset shifts
         const workbook = XLSX.read(buffer, { type: 'array', raw: true, cellFormulas: true });
 
         if (!workbook || !workbook.SheetNames || workbook.SheetNames.length === 0) {
@@ -755,7 +754,7 @@ function renderHeatmap() {
     if (!container) return;
     container.innerHTML = '';
 
-    // Map trades by exact UTC key: "2026-6-31" (July 31) or "2026-7-3" (August 3)
+    // Map trades by UTC date key: "2026-6-31" (July 31) or "2026-7-3" (August 3)
     const dateMap = {};
     allTradesChronological.forEach(t => {
         const key = `${t.dateInfo.year}-${t.dateInfo.month}-${t.dateInfo.date}`;
@@ -786,11 +785,13 @@ function renderHeatmap() {
             if (trade) {
                 const val = trade.netPnl;
                 let colorClass = 'scale-neutral';
-                if (val > 4000) colorClass = 'scale-profit-3';
-                else if (val > 1500) colorClass = 'scale-profit-2';
+
+                // Requested Gradient Rules: Profit > 0, Profit > 5,000, Profit > 10,000
+                if (val > 10000) colorClass = 'scale-profit-3';
+                else if (val > 5000) colorClass = 'scale-profit-2';
                 else if (val > 0) colorClass = 'scale-profit-1';
-                else if (val < -4000) colorClass = 'scale-loss-3';
-                else if (val < -1500) colorClass = 'scale-loss-2';
+                else if (val < -10000) colorClass = 'scale-loss-3';
+                else if (val < -5000) colorClass = 'scale-loss-2';
                 else if (val < 0) colorClass = 'scale-loss-1';
 
                 box.classList.add(colorClass);
