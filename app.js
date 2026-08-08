@@ -426,7 +426,7 @@ function renderSummaryCards() {
         $('monthlyPnlSub').textContent = `${formatPct(roi)} of capital`;
     }
 
-    // 3. NEW Monthly Expenses Card with % of capital
+    // 3. Monthly Expenses Card with % of capital
     if ($('monthlyExpenses')) {
         $('monthlyExpenses').textContent = formatINR(monthlyExpenses);
         $('monthlyExpenses').className = 'card-value';
@@ -862,8 +862,13 @@ function renderMonthlyGrid() {
             </div>
             <div class="month-card-pnl ${statusClass}">${trades.length > 0 ? formatINR(grossPnl) : '—'} <span style="font-size: 11px; font-weight: 500; color: var(--text-muted);">(Gross)</span></div>
             <div class="month-card-details">
-                <span>Net: ${formatINR(netPnl)}</span>
-                <span>Exp: ${formatINR(expenses)}</span>
+                <div class="month-card-details-row">
+                    <span>Wins: ${winCount} | Losses: ${lossCount}</span>
+                </div>
+                <div class="month-card-details-row">
+                    <span>Net: ${formatINR(netPnl)}</span>
+                    <span>Exp: ${formatINR(expenses)}</span>
+                </div>
             </div>
         `;
         grid.appendChild(card);

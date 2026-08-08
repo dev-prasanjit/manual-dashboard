@@ -311,11 +311,11 @@ body {
     padding: 4px 8px;
 }
 
-/* Summary Cards */
+/* Summary Cards — Exactly 6 Cards Aligned in 1 Horizontal Line */
 .summary-cards {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-    gap: 20px;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 14px;
     margin-bottom: 24px;
 }
 
@@ -323,12 +323,12 @@ body {
     background: var(--bg-card);
     backdrop-filter: blur(16px);
     border: 1px solid var(--border-color);
-    padding: 20px 22px;
-    border-radius: 18px;
+    padding: 16px 14px;
+    border-radius: 16px;
     transition: var(--transition-smooth);
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 6px;
     position: relative;
     overflow: hidden;
 }
@@ -342,26 +342,28 @@ body {
 .card-header {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 6px;
 }
 
 .card-icon {
-    font-size: 18px;
+    font-size: 15px;
 }
 
 .card-label {
-    font-size: 13px;
+    font-size: 11px;
     font-weight: 600;
     color: var(--text-muted);
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.4px;
+    white-space: nowrap;
 }
 
 .card-value {
-    font-size: 26px;
+    font-size: 20px;
     font-weight: 800;
-    letter-spacing: -0.5px;
+    letter-spacing: -0.4px;
     color: var(--text-primary);
+    white-space: nowrap;
 }
 
 .card-value.positive {
@@ -375,9 +377,12 @@ body {
 }
 
 .card-sub {
-    font-size: 12px;
+    font-size: 11px;
     color: var(--text-muted);
     font-weight: 500;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    overflow: hidden;
 }
 
 /* Overall Stats Row */
@@ -859,9 +864,16 @@ tbody td.zero {
 
 .month-card-details {
     display: flex;
-    justify-content: space-between;
+    flex-direction: column;
+    gap: 4px;
     font-size: 11px;
     color: var(--text-muted);
+}
+
+.month-card-details-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
 }
 
 /* Footer */
@@ -919,15 +931,20 @@ tbody td.zero {
 }
 
 /* Responsive adjustments */
+@media (max-width: 1200px) {
+    .summary-cards { grid-template-columns: repeat(3, 1fr); }
+}
+
 @media (max-width: 900px) {
     .container { padding: 16px; }
     .header { flex-direction: column; align-items: flex-start; gap: 16px; }
     .header-right { width: 100%; justify-content: space-between; flex-wrap: wrap; }
+    .summary-cards { grid-template-columns: repeat(2, 1fr); }
     .daywise-grid { grid-template-columns: repeat(2, 1fr); }
     .analytics-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 600px) {
-    .daywise-grid { grid-template-columns: 1fr; }
     .summary-cards { grid-template-columns: 1fr; }
+    .daywise-grid { grid-template-columns: 1fr; }
 }
