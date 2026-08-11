@@ -146,6 +146,8 @@ function parseDateVal(val) {
     if (typeof val === 'number' || (!isNaN(val) && !String(val).includes('/'))) {
         const serial = parseFloat(val);
         if (serial > 40000) {
+            // Excel 1900 date system epoch (Dec 30, 1899)
+            // (serial - 25569) * 86400 * 1000 gives exact UTC milliseconds
             dt = new Date(Math.round((serial - 25569) * 86400 * 1000));
         }
     } else if (val instanceof Date) {
@@ -316,15 +318,17 @@ function parseSheetMatrix(rows, sheetName, monthShort) {
         if (!dateInfo) continue;
 
         const grossPnl = parseNum(row[1]);
-        const grossRoi = parseNum(row[2]);
         const expenses = parseNum(row[3]);
-        const expensePct = parseNum(row[4]);
         const cumMonthPnl = parseNum(row[5]);
         const cumMonthRoi = parseNum(row[6]);
 
         // Calculate Daily Net P&L = Gross P&L - Expenses
         const netPnl = grossPnl - expenses;
-        const netRoi = grossRoi > 0 ? (grossRoi - expensePct) : 0;
+
+        // Calculate exact Net ROI % directly relative to Capital Deployed (e.g. 9176.71 / 100000 * 100 = 9.18%)
+        const netRoi = capital > 0 ? (netPnl / capital) * 100 : 0;
+        const grossRoi = capital > 0 ? (grossPnl / capital) * 100 : 0;
+        const expensePct = capital > 0 ? (expenses / capital) * 100 : 0;
 
         // Only record active trading days (where gross P&L or expenses != 0)
         if (grossPnl !== 0 || expenses !== 0) {
