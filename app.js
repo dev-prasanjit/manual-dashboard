@@ -146,8 +146,6 @@ function parseDateVal(val) {
     if (typeof val === 'number' || (!isNaN(val) && !String(val).includes('/'))) {
         const serial = parseFloat(val);
         if (serial > 40000) {
-            // Excel 1900 date system epoch (Dec 30, 1899)
-            // (serial - 25569) * 86400 * 1000 gives exact UTC milliseconds
             dt = new Date(Math.round((serial - 25569) * 86400 * 1000));
         }
     } else if (val instanceof Date) {
@@ -783,24 +781,55 @@ function renderHeatmap() {
         dateMap[key] = t;
     });
 
+    const dayShortNames = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+    const dayNamesFull = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
     MONTH_NAMES.forEach((mName, mIdx) => {
         const col = document.createElement('div');
         col.className = 'heatmap-month-col';
 
+        // Month Label (e.g. "Aug")
         const label = document.createElement('div');
         label.className = 'heatmap-month-label';
         label.textContent = mName;
         col.appendChild(label);
 
+        // Day Shortname Headers Row (M, T, W, T, F, S, S)
+        const dayHeaderGrid = document.createElement('div');
+        dayHeaderGrid.className = 'heatmap-day-headers';
+        dayShortNames.forEach(dName => {
+            const dLabel = document.createElement('div');
+            dLabel.className = 'day-header-label';
+            dLabel.textContent = dName;
+            dayHeaderGrid.appendChild(dLabel);
+        });
+        col.appendChild(dayHeaderGrid);
+
+        // Days Grid (7 columns matching M, T, W, T, F, S, S)
         const daysGrid = document.createElement('div');
         daysGrid.className = 'heatmap-days-grid';
 
+        // Calculate starting day of week for 1st of month (0 = Mon, 6 = Sun)
+        const firstDate = new Date(Date.UTC(2026, mIdx, 1));
+        const startDayOfWeek = (firstDate.getUTCDay() + 6) % 7; // Convert Sun=0 to Mon=0...Sun=6
+
+        // 1. Add empty offset boxes before the 1st of the month
+        for (let i = 0; i < startDayOfWeek; i++) {
+            const emptyBox = document.createElement('div');
+            emptyBox.className = 'day-box empty';
+            daysGrid.appendChild(emptyBox);
+        }
+
+        // 2. Add actual day boxes for all days in month
         const daysInMonth = new Date(Date.UTC(2026, mIdx + 1, 0)).getUTCDate();
 
         for (let day = 1; day <= daysInMonth; day++) {
             const box = document.createElement('div');
             box.className = 'day-box';
             
+            const currentDayOfWeekIdx = (startDayOfWeek + day - 1) % 7;
+            const currentDayName = dayNamesFull[currentDayOfWeekIdx];
+
             const key = `2026-${mIdx}-${day}`;
             const trade = dateMap[key];
 
@@ -820,7 +849,9 @@ function renderHeatmap() {
                 box.title = `${trade.dateStr}: Gross ${formatINR(trade.grossPnl)} | Exp ${formatINR(trade.expenses)} | Net ${formatINR(val)}`;
             } else {
                 box.classList.add('scale-neutral');
-                box.title = `${day} ${mName} 2026: No Trade Data`;
+                const paddedDay = String(day).padStart(2, '0');
+                const paddedMonth = String(mIdx + 1).padStart(2, '0');
+                box.title = `${paddedDay}/${paddedMonth}/2026 - ${currentDayName}: No Trade Data`;
             }
 
             daysGrid.appendChild(box);

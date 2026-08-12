@@ -763,7 +763,7 @@ tbody td.zero {
 .calendar-heatmap {
     display: flex;
     gap: 12px;
-    min-width: 900px;
+    min-width: 960px;
 }
 
 .heatmap-month-col {
@@ -774,11 +774,26 @@ tbody td.zero {
 }
 
 .heatmap-month-label {
-    font-size: 11px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-secondary);
+    text-align: center;
+    margin-bottom: 2px;
+}
+
+.heatmap-day-headers {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 4px;
+    margin-bottom: 4px;
+}
+
+.day-header-label {
+    font-size: 9px;
     font-weight: 700;
     color: var(--text-muted);
     text-align: center;
-    margin-bottom: 4px;
+    text-transform: uppercase;
 }
 
 .heatmap-days-grid {
@@ -801,7 +816,9 @@ tbody td.zero {
 }
 
 .day-box.empty {
-    opacity: 0.15;
+    opacity: 0.12;
+    background-color: transparent;
+    border: 1px dashed rgba(255, 255, 255, 0.05);
     pointer-events: none;
 }
 
